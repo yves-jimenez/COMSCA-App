@@ -7,6 +7,7 @@ export type Member = {
   join_date: string
   total_shares: string
   total_social_fund_contributions: string
+  total_penalties: string
 }
 
 export type CreateMemberInput = {
@@ -18,7 +19,7 @@ export type CreateMemberInput = {
 export async function listMembers(): Promise<Member[]> {
   const { data, error } = await supabase
     .from('members')
-    .select('id, full_name, contact_info, join_date, total_shares, total_social_fund_contributions')
+    .select('id, full_name, contact_info, join_date, total_shares, total_social_fund_contributions, total_penalties')
     .order('join_date', { ascending: true })
 
   if (error) throw error
@@ -33,7 +34,7 @@ export async function createMember(input: CreateMemberInput): Promise<Member> {
       contact_info: input.contact_info ?? null,
       join_date: input.join_date ?? new Date().toISOString().slice(0, 10),
     })
-    .select('id, full_name, contact_info, join_date, total_shares, total_social_fund_contributions')
+    .select('id, full_name, contact_info, join_date, total_shares, total_social_fund_contributions, total_penalties')
     .single()
 
   if (error) throw error

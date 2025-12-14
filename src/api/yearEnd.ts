@@ -32,6 +32,12 @@ export async function computeYearEndDistribution(
     (sum, l) => sum + Number(l.service_charge_amount || 0),
     0,
   )
+  const totalPenalties = members.reduce(
+    (sum, m) => sum + Number(m.total_penalties || 0),
+    0,
+  )
+  // Add penalties to service charge earnings for distribution
+  const totalEarningsWithPenalties = totalServiceChargeEarnings + totalPenalties
   const totalSocialFund = members.reduce(
     (sum, m) => sum + Number(m.total_social_fund_contributions || 0),
     0,
@@ -43,7 +49,7 @@ export async function computeYearEndDistribution(
     const memberShares = Number(m.total_shares || 0)
     const serviceChargeEarnings =
       totalShares > 0
-        ? (memberShares / totalShares) * totalServiceChargeEarnings
+        ? (memberShares / totalShares) * totalEarningsWithPenalties
         : 0
     const socialFundShare = numMembers > 0 ? totalSocialFund / numMembers : 0
 
@@ -64,7 +70,7 @@ export async function computeYearEndDistribution(
     members: memberDistributions,
     summary: {
       totalShares,
-      totalServiceChargeEarnings,
+      totalServiceChargeEarnings: totalEarningsWithPenalties,
       totalSocialFund,
       numMembers,
     },

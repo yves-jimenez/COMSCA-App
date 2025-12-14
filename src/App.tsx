@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { supabase } from './lib/supabaseClient'
 import { type Member, listMembers, createMember } from './api/members'
 import {
   type ContributionType,
@@ -22,7 +23,7 @@ import {
 import { YearEndModal } from './components/YearEndModal'
 import { YearEndReport } from './components/YearEndReport'
 
-const SHARE_VALUE = 250 // pesos per share
+const SHARE_VALUE = 500 // pesos per share
 
 type Screen = 'dashboard' | 'members' | 'loans'
 
@@ -122,6 +123,10 @@ function App() {
     (sum, l) => sum + Number(l.service_charge_amount || 0),
     0,
   )
+  const totalPenalties = members.reduce(
+    (sum, m) => sum + Number(m.total_penalties || 0),
+    0,
+  )
   const totalContributions = totalSharesValue + totalSocialFund
 
   async function handleCreateMember(e: React.FormEvent) {
@@ -188,7 +193,6 @@ function App() {
     e.preventDefault()
     if (!selectedMemberId) return
     const principal = Number(loanAmount)
-    const term = loanTermMonths ? Number(loanTermMonths) : undefined
     if (!Number.isFinite(principal) || principal <= 0) return
 
     setLoading(true)
@@ -197,11 +201,9 @@ function App() {
       const loan = await createLoan({
         borrower_id: selectedMemberId,
         principal_amount: principal,
-        term_months: term,
       })
       setLoans((prev) => [loan, ...prev])
       setLoanAmount('')
-      setLoanTermMonths('')
     } catch (err: any) {
       setError(err.message ?? 'Failed to create loan')
     } finally {
@@ -295,14 +297,20 @@ function App() {
     setLoading(true)
     setError(null)
     try {
-      // Record penalty as a positive amount with "Attendance penalty" remarks
-      // The UI will treat this as a deduction from social fund
-      await createContribution({
-        member_id: selectedMemberId,
-        type: 'SOCIAL_FUND',
-        amount,
-        remarks: 'Attendance penalty',
-      })
+      // Get current member data
+      const member = members.find((m) => m.id === selectedMemberId)
+      if (!member) throw new Error('Member not found')
+
+      const currentPenalties = Number(member.total_penalties || 0)
+      const newPenalties = currentPenalties + amount
+
+      // Update member's total_penalties
+      const { error } = await supabase
+        .from('members')
+        .update({ total_penalties: newPenalties })
+        .eq('id', selectedMemberId)
+
+      if (error) throw error
       await refreshAll()
       setPenaltyAmount('')
     } catch (err: any) {
@@ -320,7 +328,7 @@ function App() {
   function renderDashboard() {
     return (
       <div className="space-y-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           <div className="bg-white rounded-lg shadow p-6 border-l-4 border-blue-500">
             <p className="text-gray-600 text-sm font-medium">Total Shares (Pesos)</p>
             <p className="text-3xl font-bold text-blue-600 mt-2">
@@ -343,6 +351,12 @@ function App() {
             <p className="text-gray-600 text-sm font-medium">Service Charge Earnings</p>
             <p className="text-3xl font-bold text-orange-600 mt-2">
               ₱{totalServiceCharge.toFixed(2)}
+            </p>
+          </div>
+          <div className="bg-white rounded-lg shadow p-6 border-l-4 border-red-500">
+            <p className="text-gray-600 text-sm font-medium">Total Penalties</p>
+            <p className="text-3xl font-bold text-red-600 mt-2">
+              ₱{totalPenalties.toFixed(2)}
             </p>
           </div>
         </div>
@@ -374,18 +388,18 @@ function App() {
               placeholder="Full name"
               value={newMemberName}
               onChange={(e) => setNewMemberName(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
             />
             <input
               type="text"
               placeholder="Contact info"
               value={newMemberContact}
               onChange={(e) => setNewMemberContact(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
             />
             <button
               type="submit"
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 rounded-lg transition"
+              className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-2 rounded-lg transition"
             >
               Add Member
             </button>
@@ -399,7 +413,7 @@ function App() {
                 onClick={() => setSelectedMemberId(m.id)}
                 className={`w-full text-left px-4 py-3 rounded-lg transition ${
                   m.id === selectedMemberId
-                    ? 'bg-blue-600 text-white'
+                    ? 'bg-green-600 text-white'
                     : 'bg-gray-100 hover:bg-gray-200 text-gray-800'
                 }`}
               >
@@ -516,18 +530,9 @@ function App() {
                       className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                   </div>
-                  <div>
-                    <label className="block text-gray-700 font-semibold mb-2">
-                      Term (months, optional)
-                    </label>
-                    <input
-                      type="number"
-                      placeholder="Term (months, optional)"
-                      value={loanTermMonths}
-                      onChange={(e) => setLoanTermMonths(e.target.value)}
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
+                  <p className="text-sm text-gray-600">
+                    Monthly service charge: 2% of current balance
+                  </p>
                   <button
                     type="submit"
                     className="w-full bg-purple-600 hover:bg-purple-700 text-white font-semibold py-2 rounded-lg transition"
@@ -590,7 +595,7 @@ function App() {
                 onClick={() => handleSelectLoan(loan.id)}
                 className={`w-full text-left px-4 py-3 rounded-lg transition ${
                   loan.id === selectedLoanId
-                    ? 'bg-blue-600 text-white'
+                    ? 'bg-green-600 text-white'
                     : 'bg-gray-100 hover:bg-gray-200 text-gray-800'
                 }`}
               >
@@ -760,18 +765,28 @@ function App() {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <header className="bg-gradient-to-r from-blue-600 to-blue-800 text-white shadow-lg">
-        <div className="max-w-7xl mx-auto px-4 py-6">
+      <header className="bg-green-100 text-gray-800 shadow-sm border-b-4 border-green-300">
+        <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex justify-between items-center">
-            <h1 className="text-3xl font-bold">COMSCA Admin</h1>
+            <div className="flex items-center gap-4">
+              <img 
+                src="/Logo.png" 
+                alt="COMSCA Logo" 
+                className="h-14 w-auto"
+              />
+              <div>
+                <h1 className="text-2xl font-bold text-green-700">COMSCA Admin</h1>
+                <p className="text-green-600 text-xs">Cooperative Management System</p>
+              </div>
+            </div>
             <nav className="flex gap-2">
               <button
                 type="button"
                 onClick={() => setScreen('dashboard')}
                 className={`px-4 py-2 rounded-lg font-semibold transition ${
                   screen === 'dashboard'
-                    ? 'bg-white text-blue-600'
-                    : 'bg-blue-700 hover:bg-blue-600 text-white'
+                    ? 'bg-white text-green-700'
+                    : 'bg-green-200 hover:bg-green-300 text-green-700'
                 }`}
               >
                 Dashboard
@@ -781,8 +796,8 @@ function App() {
                 onClick={() => setScreen('members')}
                 className={`px-4 py-2 rounded-lg font-semibold transition ${
                   screen === 'members'
-                    ? 'bg-white text-blue-600'
-                    : 'bg-blue-700 hover:bg-blue-600 text-white'
+                    ? 'bg-white text-green-700'
+                    : 'bg-green-200 hover:bg-green-300 text-green-700'
                 }`}
               >
                 Members
@@ -792,8 +807,8 @@ function App() {
                 onClick={() => setScreen('loans')}
                 className={`px-4 py-2 rounded-lg font-semibold transition ${
                   screen === 'loans'
-                    ? 'bg-white text-blue-600'
-                    : 'bg-blue-700 hover:bg-blue-600 text-white'
+                    ? 'bg-white text-green-700'
+                    : 'bg-green-200 hover:bg-green-300 text-green-700'
                 }`}
               >
                 Loans

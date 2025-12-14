@@ -10,10 +10,12 @@ export type YearEndDistribution = {
     serviceChargeEarnings: number
     socialFundShare: number
     totalDistribution: number
+    memberPenalties: number
   }>
   summary: {
     totalShares: number
     totalServiceChargeEarnings: number
+    totalPenalties: number
     totalSocialFund: number
     numMembers: number
   }
@@ -47,6 +49,7 @@ export async function computeYearEndDistribution(
   // Compute per-member distribution
   const memberDistributions = members.map((m) => {
     const memberShares = Number(m.total_shares || 0)
+    const memberPenalties = Number(m.total_penalties || 0)
     const serviceChargeEarnings =
       totalShares > 0
         ? (memberShares / totalShares) * totalEarningsWithPenalties
@@ -63,6 +66,7 @@ export async function computeYearEndDistribution(
         Math.round(
           (memberShares + serviceChargeEarnings + socialFundShare) * 100,
         ) / 100,
+      memberPenalties,
     }
   })
 
@@ -70,7 +74,8 @@ export async function computeYearEndDistribution(
     members: memberDistributions,
     summary: {
       totalShares,
-      totalServiceChargeEarnings: totalEarningsWithPenalties,
+      totalServiceChargeEarnings,
+      totalPenalties,
       totalSocialFund,
       numMembers,
     },
@@ -99,6 +104,23 @@ export async function clearYearData(): Promise<void> {
     .neq('id', -1) // Delete all rows
 
   if (contributionsError) throw contributionsError
+
+  // Get all members and reset their total_penalties
+  const { data: members, error: fetchError } = await supabase
+    .from('members')
+    .select('id')
+
+  if (fetchError) throw fetchError
+
+  if (members && members.length > 0) {
+    const memberIds = members.map((m: any) => m.id)
+    const { error: penaltiesError } = await supabase
+      .from('members')
+      .update({ total_penalties: 0 })
+      .in('id', memberIds)
+
+    if (penaltiesError) throw penaltiesError
+  }
 
   // Triggers will automatically reset members.total_shares and total_social_fund_contributions to 0
 }

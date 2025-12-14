@@ -28,7 +28,7 @@ export function YearEndModal({
           {/* Summary Section */}
           <section className="mb-8">
             <h3 className="text-xl font-semibold text-gray-700 mb-4">Summary</h3>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               <div className="bg-blue-50 p-4 rounded-lg">
                 <p className="text-gray-600 text-sm">Total Members</p>
                 <p className="text-2xl font-bold text-blue-600">{summary.numMembers}</p>
@@ -43,6 +43,12 @@ export function YearEndModal({
                 <p className="text-gray-600 text-sm">Service Charge</p>
                 <p className="text-2xl font-bold text-orange-600">
                   ₱{summary.totalServiceChargeEarnings.toFixed(2)}
+                </p>
+              </div>
+              <div className="bg-red-50 p-4 rounded-lg">
+                <p className="text-gray-600 text-sm">Total Penalties</p>
+                <p className="text-2xl font-bold text-red-600">
+                  ₱{summary.totalPenalties.toFixed(2)}
                 </p>
               </div>
               <div className="bg-purple-50 p-4 rounded-lg">
@@ -71,7 +77,7 @@ export function YearEndModal({
                     <th className="px-4 py-3 text-right font-semibold text-gray-700">
                       Social Fund
                     </th>
-                    <th className="px-4 py-3 text-right font-semibold text-gray-700">Total</th>
+                    <th className="px-4 py-3 text-right font-semibold text-gray-700">Cash to be Dispersed</th>
                   </tr>
                 </thead>
                 <tbody>

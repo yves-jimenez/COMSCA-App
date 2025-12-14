@@ -57,7 +57,7 @@ export function YearEndReport({
             <h2 className="text-2xl font-bold text-gray-800 mb-4 pb-2 border-b-2 border-blue-500">
               Financial Summary
             </h2>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
                 <p className="text-gray-600 text-sm font-medium">Total Members</p>
                 <p className="text-2xl font-bold text-blue-600">{summary.numMembers}</p>
@@ -72,6 +72,12 @@ export function YearEndReport({
                 <p className="text-gray-600 text-sm font-medium">Service Charge Earnings</p>
                 <p className="text-2xl font-bold text-orange-600">
                   ₱{summary.totalServiceChargeEarnings.toFixed(2)}
+                </p>
+              </div>
+              <div className="bg-red-50 p-4 rounded-lg border border-red-200">
+                <p className="text-gray-600 text-sm font-medium">Total Penalties</p>
+                <p className="text-2xl font-bold text-red-600">
+                  ₱{summary.totalPenalties.toFixed(2)}
                 </p>
               </div>
               <div className="bg-purple-50 p-4 rounded-lg border border-purple-200">
@@ -138,10 +144,13 @@ export function YearEndReport({
                       Service Charge (₱)
                     </th>
                     <th className="border border-gray-300 px-4 py-2 text-right font-semibold text-gray-700">
+                      Penalties (₱)
+                    </th>
+                    <th className="border border-gray-300 px-4 py-2 text-right font-semibold text-gray-700">
                       Social Fund (₱)
                     </th>
                     <th className="border border-gray-300 px-4 py-2 text-right font-semibold text-gray-700">
-                      Total (₱)
+                      Cash to be Dispersed (₱)
                     </th>
                   </tr>
                 </thead>
@@ -156,6 +165,9 @@ export function YearEndReport({
                       </td>
                       <td className="border border-gray-300 px-4 py-2 text-right text-gray-700">
                         {m.serviceChargeEarnings.toFixed(2)}
+                      </td>
+                      <td className="border border-gray-300 px-4 py-2 text-right text-red-600 font-medium">
+                        {m.memberPenalties.toFixed(2)}
                       </td>
                       <td className="border border-gray-300 px-4 py-2 text-right text-gray-700">
                         {m.socialFundShare.toFixed(2)}

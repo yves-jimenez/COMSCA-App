@@ -51,6 +51,7 @@ function App() {
   // Loan form state
   const [loanAmount, setLoanAmount] = useState('')
   const [loanTermMonths, setLoanTermMonths] = useState('')
+  const [previewServiceCharge, setPreviewServiceCharge] = useState(0)
 
   // Loan payment form state
   const [paymentAmount, setPaymentAmount] = useState('')
@@ -106,8 +107,8 @@ function App() {
   )
 
   const selectedLoanBalance = useMemo(
-    () => (selectedLoan ? computeLoanBalance(selectedLoan, loanPayments) : 0),
-    [selectedLoan, loanPayments],
+    () => (selectedLoan ? computeLoanBalance(selectedLoan) : 0),
+    [selectedLoan],
   )
 
   // Aggregated totals for dashboard
@@ -128,6 +129,15 @@ function App() {
     0,
   )
   const totalContributions = totalSharesValue + totalSocialFund
+  
+  // Calculate total outstanding loan balance
+  const totalOutstandingLoans = loans.reduce(
+    (sum, l) => sum + Number(l.principal_amount || 0) + Number(l.service_charge_amount || 0),
+    0,
+  )
+  
+  // Grand total cash on hand = contributions + service charges - outstanding loans
+  const grandTotalCashOnHand = totalContributions + totalServiceCharge - totalOutstandingLoans
 
   async function handleCreateMember(e: React.FormEvent) {
     e.preventDefault()
@@ -226,6 +236,9 @@ function App() {
         payment_date: paymentDate || undefined,
         remarks: paymentRemarks || undefined,
       })
+      // Refresh loans to get updated principal and service charge from database
+      const loansData = await listLoans()
+      setLoans(loansData)
       const payments = await listLoanPayments(selectedLoanId)
       setLoanPayments(payments)
       setPaymentAmount('')
@@ -361,6 +374,16 @@ function App() {
           </div>
         </div>
 
+        <div className="bg-gradient-to-r from-teal-500 to-cyan-600 rounded-lg shadow p-8 text-white">
+          <p className="text-lg font-medium opacity-90">Grand Total Cash on Hand</p>
+          <p className="text-5xl font-bold mt-3">
+            ₱{grandTotalCashOnHand.toFixed(2)}
+          </p>
+          <p className="text-sm opacity-75 mt-2">
+            Contributions + Service Charges - Outstanding Loans
+          </p>
+        </div>
+
         <div className="bg-white rounded-lg shadow p-6">
           <h2 className="text-2xl font-bold text-gray-800 mb-4">Year-End Operations</h2>
           <button
@@ -452,6 +475,12 @@ function App() {
                       ₱{selectedMember.total_social_fund_contributions}
                     </p>
                   </div>
+                  <div>
+                    <p className="text-gray-600 text-sm">Total Penalties</p>
+                    <p className="text-lg font-semibold text-red-600">
+                      ₱{selectedMember.total_penalties}
+                    </p>
+                  </div>
                 </div>
               </div>
 
@@ -526,12 +555,22 @@ function App() {
                       step="0.01"
                       placeholder="Principal amount"
                       value={loanAmount}
-                      onChange={(e) => setLoanAmount(e.target.value)}
+                      onChange={(e) => {
+                        setLoanAmount(e.target.value)
+                        const amount = Number(e.target.value)
+                        setPreviewServiceCharge(Number.isFinite(amount) && amount > 0 ? Math.round(amount * 0.02 * 100) / 100 : 0)
+                      }}
                       className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                   </div>
+                  <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                    <p className="text-sm text-gray-600 mb-2">Monthly service charge preview (2%):</p>
+                    <p className="text-2xl font-bold text-green-700">
+                      ₱{previewServiceCharge.toFixed(2)}
+                    </p>
+                  </div>
                   <p className="text-sm text-gray-600">
-                    Monthly service charge: 2% of current balance
+                    Service charge is calculated monthly on the current balance
                   </p>
                   <button
                     type="submit"
@@ -631,7 +670,7 @@ function App() {
                   <div>
                     <p className="text-gray-600 text-sm">Service Charge (2%)</p>
                     <p className="text-lg font-semibold text-orange-600">
-                      ₱{selectedLoan.service_charge_amount}
+                      ₱{Number(selectedLoan.service_charge_amount || 0).toFixed(2)}
                     </p>
                   </div>
                   <div>

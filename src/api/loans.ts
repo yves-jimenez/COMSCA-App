@@ -78,6 +78,7 @@ export async function listLoanPayments(loanId: number): Promise<LoanPayment[]> {
 }
 
 export async function createLoanPayment(input: CreateLoanPaymentInput): Promise<LoanPayment> {
+  // Create the payment record
   const { data, error } = await supabase
     .from('loan_payments')
     .insert({
@@ -90,20 +91,37 @@ export async function createLoanPayment(input: CreateLoanPaymentInput): Promise<
     .single()
 
   if (error) throw error
+
+  // Fetch the current loan to get its principal
+  const { data: loanData, error: loanError } = await supabase
+    .from('loans')
+    .select('principal_amount')
+    .eq('id', input.loan_id)
+    .single()
+
+  if (loanError) throw loanError
+
+  // Calculate new principal (reduce by payment amount)
+  const currentPrincipal = Number(loanData.principal_amount || 0)
+  const newPrincipal = Math.max(0, currentPrincipal - input.amount)
+
+  // Update the loan's principal amount
+  const { error: updateError } = await supabase
+    .from('loans')
+    .update({ principal_amount: newPrincipal })
+    .eq('id', input.loan_id)
+
+  if (updateError) throw updateError
+
   return data as LoanPayment
 }
 
 export function computeLoanBalance(
   loan: Loan,
-  payments: LoanPayment[],
 ): number {
   const principal = Number(loan.principal_amount || 0)
   const serviceCharge = Number(loan.service_charge_amount || 0)
-  const totalPayments = payments.reduce(
-    (sum, p) => sum + Number(p.amount || 0),
-    0,
-  )
-  return principal + serviceCharge - totalPayments
+  return principal + serviceCharge
 }
 
 export function computeTotalPayments(payments: LoanPayment[]): number {

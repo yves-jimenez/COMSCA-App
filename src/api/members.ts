@@ -2,6 +2,7 @@ import { supabase } from '../lib/supabaseClient'
 
 export type Member = {
   id: string
+  record_id: number
   full_name: string
   contact_info: string | null
   join_date: string
@@ -19,7 +20,7 @@ export type CreateMemberInput = {
 export async function listMembers(): Promise<Member[]> {
   const { data, error } = await supabase
     .from('members')
-    .select('id, full_name, contact_info, join_date, total_shares, total_social_fund_contributions, total_penalties')
+    .select('id, record_id, full_name, contact_info, join_date, total_shares, total_social_fund_contributions, total_penalties')
     .order('join_date', { ascending: true })
 
   if (error) throw error
@@ -34,9 +35,33 @@ export async function createMember(input: CreateMemberInput): Promise<Member> {
       contact_info: input.contact_info ?? null,
       join_date: input.join_date ?? new Date().toISOString().slice(0, 10),
     })
-    .select('id, full_name, contact_info, join_date, total_shares, total_social_fund_contributions, total_penalties')
+    .select('id, record_id, full_name, contact_info, join_date, total_shares, total_social_fund_contributions, total_penalties')
     .single()
 
   if (error) throw error
   return data as Member
+}
+
+export async function updateMember(memberId: string, input: Partial<CreateMemberInput>): Promise<Member> {
+  const { data, error } = await supabase
+    .from('members')
+    .update({
+      full_name: input.full_name,
+      contact_info: input.contact_info ?? null,
+    })
+    .eq('id', memberId)
+    .select('id, record_id, full_name, contact_info, join_date, total_shares, total_social_fund_contributions, total_penalties')
+    .single()
+
+  if (error) throw error
+  return data as Member
+}
+
+export async function deleteMember(memberId: string): Promise<void> {
+  const { error } = await supabase
+    .from('members')
+    .delete()
+    .eq('id', memberId)
+
+  if (error) throw error
 }

@@ -66,6 +66,27 @@ export async function createLoan(input: CreateLoanInput): Promise<Loan> {
   return data as Loan
 }
 
+export async function updateLoanStatus(loanId: number, status: LoanStatus): Promise<Loan> {
+  const { data, error } = await supabase
+    .from('loans')
+    .update({ status })
+    .eq('id', loanId)
+    .select('id, borrower_id, principal_amount, term_months, service_charge_rate, service_charge_amount, status, approved_at, released_at, completed_at, remarks')
+    .single()
+
+  if (error) throw error
+  return data as Loan
+}
+
+export async function deleteLoan(loanId: number): Promise<void> {
+  const { error } = await supabase
+    .from('loans')
+    .delete()
+    .eq('id', loanId)
+
+  if (error) throw error
+}
+
 export async function listLoanPayments(loanId: number): Promise<LoanPayment[]> {
   const { data, error } = await supabase
     .from('loan_payments')

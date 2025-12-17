@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
+import { motion } from 'framer-motion'
 import { supabase } from './lib/supabaseClient'
-import { type Member, listMembers, createMember } from './api/members'
+import { type Member, listMembers, createMember, updateMember } from './api/members'
 import {
   type ContributionType,
   createContribution,
@@ -14,6 +15,9 @@ import {
   createLoanPayment,
   computeLoanBalance,
   computeTotalPayments,
+  updateLoanStatus,
+  deleteLoan,
+  type LoanStatus,
 } from './api/loans'
 import {
   type YearEndDistribution,
@@ -50,7 +54,6 @@ function App() {
 
   // Loan form state
   const [loanAmount, setLoanAmount] = useState('')
-  const [loanTermMonths, setLoanTermMonths] = useState('')
   const [previewServiceCharge, setPreviewServiceCharge] = useState(0)
 
   // Loan payment form state
@@ -67,6 +70,35 @@ function App() {
     useState<YearEndDistribution | null>(null)
   const [yearEndLoading, setYearEndLoading] = useState(false)
   const [yearEndReportOpen, setYearEndReportOpen] = useState(false)
+
+  // Member edit state
+  const [editingMemberId, setEditingMemberId] = useState<string | null>(null)
+  const [editMemberName, setEditMemberName] = useState('')
+  const [editMemberContact, setEditMemberContact] = useState('')
+  const [editMemberRecordId, setEditMemberRecordId] = useState('')
+
+  // Ref for scrollable member details container
+  const memberDetailsScrollRef = useRef<HTMLDivElement>(null)
+
+  // Add member modal state
+  const [addMemberModalOpen, setAddMemberModalOpen] = useState(false)
+
+  // Notification state
+  type NotificationType = 'success' | 'error' | 'info'
+  interface Notification {
+    id: string
+    type: NotificationType
+    message: string
+  }
+  const [notifications, setNotifications] = useState<Notification[]>([])
+
+  function showNotification(type: NotificationType, message: string) {
+    const id = Date.now().toString()
+    setNotifications((prev) => [...prev, { id, type, message }])
+    setTimeout(() => {
+      setNotifications((prev) => prev.filter((n) => n.id !== id))
+    }, 4000)
+  }
 
   useEffect(() => {
     void refreshAll()
@@ -144,7 +176,6 @@ function App() {
     if (!newMemberName.trim()) return
 
     setLoading(true)
-    setError(null)
     try {
       const member = await createMember({
         full_name: newMemberName.trim(),
@@ -156,8 +187,9 @@ function App() {
       if (!selectedMemberId) {
         setSelectedMemberId(member.id)
       }
+      showNotification('success', `Member "${member.full_name}" added successfully`)
     } catch (err: any) {
-      setError(err.message ?? 'Failed to create member')
+      showNotification('error', err.message ?? 'Failed to create member')
     } finally {
       setLoading(false)
     }
@@ -168,7 +200,6 @@ function App() {
     if (!selectedMemberId) return
 
     setLoading(true)
-    setError(null)
     try {
       if (contributionType === 'SHARE') {
         const shares = Number(shareCount)
@@ -179,6 +210,7 @@ function App() {
           type: 'SHARE',
           amount,
         })
+        showNotification('success', `${shares} share(s) added successfully (₱${amount})`)
       } else {
         const amountNumber = Number(socialFundAmount)
         if (!Number.isFinite(amountNumber) || amountNumber <= 0) return
@@ -187,13 +219,14 @@ function App() {
           type: 'SOCIAL_FUND',
           amount: amountNumber,
         })
+        showNotification('success', `Social fund contribution of ₱${amountNumber} added successfully`)
       }
 
       await refreshAll()
       setShareCount('')
       setSocialFundAmount('')
     } catch (err: any) {
-      setError(err.message ?? 'Failed to create contribution')
+      showNotification('error', err.message ?? 'Failed to create contribution')
     } finally {
       setLoading(false)
     }
@@ -206,7 +239,6 @@ function App() {
     if (!Number.isFinite(principal) || principal <= 0) return
 
     setLoading(true)
-    setError(null)
     try {
       const loan = await createLoan({
         borrower_id: selectedMemberId,
@@ -214,8 +246,10 @@ function App() {
       })
       setLoans((prev) => [loan, ...prev])
       setLoanAmount('')
+      const serviceCharge = Number(loan.service_charge_amount || 0)
+      showNotification('success', `Loan created successfully (Principal: ₱${principal}, Service Charge: ₱${serviceCharge.toFixed(2)})`)
     } catch (err: any) {
-      setError(err.message ?? 'Failed to create loan')
+      showNotification('error', err.message ?? 'Failed to create loan')
     } finally {
       setLoading(false)
     }
@@ -338,43 +372,124 @@ function App() {
     return members.find((m) => m.id === memberId)?.full_name ?? 'Unknown'
   }
 
+  async function handleDeleteLoan(loanId: number) {
+    const loan = loans.find((l) => l.id === loanId)
+    if (!loan) return
+
+    const borrowerName = getMemberName(loan.borrower_id)
+    const confirmMessage = `Delete Loan #${loanId}?\n\nBorrower: ${borrowerName}\nPrincipal: ₱${loan.principal_amount}\nStatus: ${loan.status}\n\nThis action cannot be undone.`
+
+    if (!window.confirm(confirmMessage)) return
+
+    setLoading(true)
+    setError(null)
+    try {
+      await deleteLoan(loanId)
+      setLoans((prev) => prev.filter((l) => l.id !== loanId))
+      setSelectedLoanId(null)
+      setLoanPayments([])
+      showNotification('success', `Loan #${loanId} deleted successfully`)
+    } catch (err: any) {
+      showNotification('error', err.message ?? 'Failed to delete loan')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleUpdateLoanStatus(loanId: number, newStatus: LoanStatus) {
+    setLoading(true)
+    setError(null)
+    try {
+      const updatedLoan = await updateLoanStatus(loanId, newStatus)
+      setLoans((prev) =>
+        prev.map((l) => (l.id === loanId ? updatedLoan : l))
+      )
+    } catch (err: any) {
+      setError(err.message ?? 'Failed to update loan status')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleEditMember(e: React.FormEvent) {
+    e.preventDefault()
+    if (!editingMemberId || !editMemberName.trim()) return
+
+    setLoading(true)
+    setError(null)
+    try {
+      const updatedMember = await updateMember(editingMemberId, {
+        full_name: editMemberName.trim(),
+        contact_info: editMemberContact.trim() || undefined,
+      })
+      setMembers((prev) =>
+        prev.map((m) => (m.id === editingMemberId ? updatedMember : m))
+      )
+      setEditingMemberId(null)
+      setEditMemberName('')
+      setEditMemberContact('')
+    } catch (err: any) {
+      setError(err.message ?? 'Failed to update member')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function startEditMember(member: Member) {
+    setEditingMemberId(member.id)
+    setEditMemberName(member.full_name)
+    setEditMemberContact(member.contact_info || '')
+  }
+
+  function cancelEditMember() {
+    setEditingMemberId(null)
+    setEditMemberName('')
+    setEditMemberContact('')
+  }
+
   function renderDashboard() {
+    const cardVariants = {
+      hidden: { opacity: 0, y: 20 },
+      visible: (i: number) => ({
+        opacity: 1,
+        y: 0,
+        transition: { delay: i * 0.1, duration: 0.5 },
+      }),
+    }
+
     return (
-      <div className="space-y-6">
+      <motion.div className="space-y-6" initial="hidden" animate="visible">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-          <div className="bg-white rounded-lg shadow p-6 border-l-4 border-blue-500">
-            <p className="text-gray-600 text-sm font-medium">Total Shares (Pesos)</p>
-            <p className="text-3xl font-bold text-blue-600 mt-2">
-              ₱{totalSharesValue.toFixed(2)}
-            </p>
-          </div>
-          <div className="bg-white rounded-lg shadow p-6 border-l-4 border-green-500">
-            <p className="text-gray-600 text-sm font-medium">Total Social Fund</p>
-            <p className="text-3xl font-bold text-green-600 mt-2">
-              ₱{totalSocialFund.toFixed(2)}
-            </p>
-          </div>
-          <div className="bg-white rounded-lg shadow p-6 border-l-4 border-purple-500">
-            <p className="text-gray-600 text-sm font-medium">Total Contributions</p>
-            <p className="text-3xl font-bold text-purple-600 mt-2">
-              ₱{totalContributions.toFixed(2)}
-            </p>
-          </div>
-          <div className="bg-white rounded-lg shadow p-6 border-l-4 border-orange-500">
-            <p className="text-gray-600 text-sm font-medium">Service Charge Earnings</p>
-            <p className="text-3xl font-bold text-orange-600 mt-2">
-              ₱{totalServiceCharge.toFixed(2)}
-            </p>
-          </div>
-          <div className="bg-white rounded-lg shadow p-6 border-l-4 border-red-500">
-            <p className="text-gray-600 text-sm font-medium">Total Penalties</p>
-            <p className="text-3xl font-bold text-red-600 mt-2">
-              ₱{totalPenalties.toFixed(2)}
-            </p>
-          </div>
+          {[
+            { label: 'Total Shares (Pesos)', value: totalSharesValue, color: 'blue' },
+            { label: 'Total Social Fund', value: totalSocialFund, color: 'green' },
+            { label: 'Total Contributions', value: totalContributions, color: 'purple' },
+            { label: 'Service Charge Earnings', value: totalServiceCharge, color: 'green' },
+            { label: 'Total Penalties', value: totalPenalties, color: 'red' },
+          ].map((card, i) => (
+            <motion.div
+              key={card.label}
+              custom={i}
+              variants={cardVariants}
+              whileHover={{ scale: 1.05, y: -5 }}
+              className={`bg-white rounded-lg shadow p-6 border-l-4 border-${card.color}-500`}
+            >
+              <div>
+                <p className="text-gray-600 text-sm font-medium">{card.label}</p>
+                <p className={`text-3xl font-bold text-${card.color}-600 mt-2`}>
+                  ₱{card.value.toFixed(2)}
+                </p>
+              </div>
+            </motion.div>
+          ))}
         </div>
 
-        <div className="bg-gradient-to-r from-teal-500 to-cyan-600 rounded-lg shadow p-8 text-white">
+        <motion.div
+          custom={5}
+          variants={cardVariants}
+          whileHover={{ scale: 1.02 }}
+          className="bg-gradient-to-r from-teal-500 to-cyan-600 rounded-lg shadow p-8 text-white"
+        >
           <p className="text-lg font-medium opacity-90">Grand Total Cash on Hand</p>
           <p className="text-5xl font-bold mt-3">
             ₱{grandTotalCashOnHand.toFixed(2)}
@@ -382,107 +497,240 @@ function App() {
           <p className="text-sm opacity-75 mt-2">
             Contributions + Service Charges - Outstanding Loans
           </p>
-        </div>
+        </motion.div>
 
-        <div className="bg-white rounded-lg shadow p-6">
-          <h2 className="text-2xl font-bold text-gray-800 mb-4">Year-End Operations</h2>
-          <button
-            type="button"
-            onClick={handleYearEndClick}
-            disabled={yearEndLoading}
-            className="bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white font-semibold py-3 px-6 rounded-lg transition"
-          >
-            {yearEndLoading ? 'Processing...' : 'Year-End Reset'}
-          </button>
-        </div>
-      </div>
+        <motion.div
+          custom={6}
+          variants={cardVariants}
+          whileHover={{ scale: 1.02 }}
+          className="bg-white rounded-lg shadow p-6"
+        >
+          <h2 className="text-2xl font-bold text-gray-800 mb-4">Operations</h2>
+          <div className="flex gap-4">
+            <motion.button
+              type="button"
+              onClick={handleYearEndClick}
+              disabled={yearEndLoading}
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              className="bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white font-semibold py-3 px-6 rounded-lg transition"
+            >
+              {yearEndLoading ? 'Processing...' : 'Year-End Distribution'}
+            </motion.button>
+          </div>
+        </motion.div>
+      </motion.div>
     )
   }
 
   function renderMembersScreen() {
     return (
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-[calc(100vh-200px)]">
         {/* Members List */}
-        <div className="lg:col-span-1 bg-white rounded-lg shadow p-6">
-          <h2 className="text-2xl font-bold text-gray-800 mb-4">Members</h2>
-          <form onSubmit={handleCreateMember} className="space-y-3 mb-6">
-            <input
-              type="text"
-              placeholder="Full name"
-              value={newMemberName}
-              onChange={(e) => setNewMemberName(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-            />
-            <input
-              type="text"
-              placeholder="Contact info"
-              value={newMemberContact}
-              onChange={(e) => setNewMemberContact(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-            />
-            <button
-              type="submit"
-              className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-2 rounded-lg transition"
+        <motion.div
+          initial={{ opacity: 0, x: -20 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ duration: 0.3 }}
+          className="lg:col-span-1 bg-white rounded-lg shadow-lg p-6 flex flex-col overflow-hidden"
+        >
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-2xl font-bold text-gray-800">Members</h2>
+            <motion.button
+              type="button"
+              onClick={() => setAddMemberModalOpen(true)}
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              className="bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white font-semibold py-2 px-4 rounded-lg transition"
             >
-              Add Member
-            </button>
-          </form>
+              + Add
+            </motion.button>
+          </div>
 
-          <div className="space-y-2 max-h-96 overflow-y-auto">
-            {members.map((m) => (
-              <button
+          <div className="flex-1 overflow-y-auto pr-2 space-y-2">
+            {members.map((m, index) => (
+              <motion.button
                 key={m.id}
                 type="button"
-                onClick={() => setSelectedMemberId(m.id)}
-                className={`w-full text-left px-4 py-3 rounded-lg transition ${
+                onClick={() => {
+                  setSelectedMemberId(m.id)
+                  memberDetailsScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+                }}
+                layout
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: index * 0.02 }}
+                whileHover={{ scale: 1.02, x: 4 }}
+                whileTap={{ scale: 0.98 }}
+                className={`w-full text-left px-4 py-3 rounded-lg transition-all ${
                   m.id === selectedMemberId
-                    ? 'bg-green-600 text-white'
+                    ? 'bg-gradient-to-r from-green-600 to-green-700 text-white shadow-lg'
                     : 'bg-gray-100 hover:bg-gray-200 text-gray-800'
                 }`}
               >
-                <div className="font-semibold">{m.full_name}</div>
-                <div className="text-sm opacity-75">Joined {m.join_date}</div>
-              </button>
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <div className="font-semibold text-sm">#{m.record_id} - {m.full_name}</div>
+                    <div className="text-xs opacity-75">Joined {m.join_date}</div>
+                  </div>
+                  {m.id === selectedMemberId && (
+                    <motion.div
+                      initial={{ scale: 0 }}
+                      animate={{ scale: 1 }}
+                      className="ml-2 text-lg"
+                    >
+                      ▼
+                    </motion.div>
+                  )}
+                </div>
+              </motion.button>
             ))}
           </div>
-        </div>
+        </motion.div>
 
         {/* Member Details & Forms */}
-        <div className="lg:col-span-2 space-y-6">
+        <motion.div
+          ref={memberDetailsScrollRef}
+          initial={{ opacity: 0, x: 20 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ duration: 0.3, delay: 0.1 }}
+          className="lg:col-span-2 space-y-6 overflow-y-auto pr-2"
+        >
           {selectedMember ? (
             <>
               {/* Member Summary */}
-              <div className="bg-white rounded-lg shadow p-6">
-                <h2 className="text-2xl font-bold text-gray-800 mb-4">
-                  {selectedMember.full_name}
-                </h2>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-gray-600 text-sm">Contact</p>
-                    <p className="text-lg font-semibold text-gray-800">
-                      {selectedMember.contact_info || '—'}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-gray-600 text-sm">Total Shares (Pesos)</p>
-                    <p className="text-lg font-semibold text-blue-600">
-                      ₱{selectedMember.total_shares}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-gray-600 text-sm">Social Fund</p>
-                    <p className="text-lg font-semibold text-green-600">
-                      ₱{selectedMember.total_social_fund_contributions}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-gray-600 text-sm">Total Penalties</p>
-                    <p className="text-lg font-semibold text-red-600">
-                      ₱{selectedMember.total_penalties}
-                    </p>
-                  </div>
-                </div>
-              </div>
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.2 }}
+                className="bg-white rounded-lg shadow-lg p-6"
+              >
+                <motion.div
+                  layout
+                  transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+                >
+                  {editingMemberId === selectedMember.id ? (
+                    <motion.form
+                      onSubmit={handleEditMember}
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.3 }}
+                      className="space-y-4"
+                    >
+                      <div className="bg-gradient-to-r from-blue-50 to-blue-100 rounded-lg p-4 border border-blue-200">
+                        <label className="block text-gray-700 font-semibold mb-2">Record ID</label>
+                        <input
+                          type="number"
+                          value={editMemberRecordId}
+                          onChange={(e) => setEditMemberRecordId(e.target.value)}
+                          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-gray-700 font-semibold mb-2">Full Name</label>
+                        <input
+                          type="text"
+                          value={editMemberName}
+                          onChange={(e) => setEditMemberName(e.target.value)}
+                          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-gray-700 font-semibold mb-2">Contact Info</label>
+                        <input
+                          type="text"
+                          value={editMemberContact}
+                          onChange={(e) => setEditMemberContact(e.target.value)}
+                          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <div className="flex gap-2 pt-2">
+                        <motion.button
+                          type="submit"
+                          disabled={loading}
+                          whileHover={{ scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                          className="flex-1 bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 disabled:from-gray-400 disabled:to-gray-400 text-white font-semibold py-2 rounded-lg transition shadow-md"
+                        >
+                          Save Changes
+                        </motion.button>
+                        <motion.button
+                          type="button"
+                          onClick={cancelEditMember}
+                          whileHover={{ scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                          className="flex-1 bg-gray-400 hover:bg-gray-500 text-white font-semibold py-2 rounded-lg transition shadow-md"
+                        >
+                          Cancel
+                        </motion.button>
+                      </div>
+                    </motion.form>
+                  ) : (
+                    <motion.div
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.3 }}
+                    >
+                      <div className="flex items-center justify-between mb-6">
+                        <div>
+                          <h2 className="text-3xl font-bold text-gray-800">
+                            {selectedMember.full_name}
+                          </h2>
+                          <p className="text-sm text-gray-500 mt-1">Record ID: #{selectedMember.record_id}</p>
+                        </div>
+                        <motion.button
+                          type="button"
+                          onClick={() => startEditMember(selectedMember)}
+                          whileHover={{ scale: 1.05 }}
+                          whileTap={{ scale: 0.95 }}
+                          className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-semibold py-2 px-6 rounded-lg transition shadow-md"
+                        >
+                          ✎ Edit
+                        </motion.button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <motion.div
+                          whileHover={{ y: -4 }}
+                          className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4 border border-blue-200 shadow-sm hover:shadow-md transition"
+                        >
+                          <p className="text-gray-600 text-sm font-medium">Contact</p>
+                          <p className="text-lg font-semibold text-gray-800 mt-2">
+                            {selectedMember.contact_info || '—'}
+                          </p>
+                        </motion.div>
+                        <motion.div
+                          whileHover={{ y: -4 }}
+                          className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4 border border-blue-200 shadow-sm hover:shadow-md transition"
+                        >
+                          <p className="text-gray-600 text-sm font-medium">Total Shares (Pesos)</p>
+                          <p className="text-lg font-semibold text-blue-600 mt-2">
+                            ₱{selectedMember.total_shares}
+                          </p>
+                        </motion.div>
+                        <motion.div
+                          whileHover={{ y: -4 }}
+                          className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg p-4 border border-green-200 shadow-sm hover:shadow-md transition"
+                        >
+                          <p className="text-gray-600 text-sm font-medium">Social Fund</p>
+                          <p className="text-lg font-semibold text-green-600 mt-2">
+                            ₱{selectedMember.total_social_fund_contributions}
+                          </p>
+                        </motion.div>
+                        <motion.div
+                          whileHover={{ y: -4 }}
+                          className="bg-gradient-to-br from-red-50 to-red-100 rounded-lg p-4 border border-red-200 shadow-sm hover:shadow-md transition"
+                        >
+                          <p className="text-gray-600 text-sm font-medium">Total Penalties</p>
+                          <p className="text-lg font-semibold text-red-600 mt-2">
+                            ₱{selectedMember.total_penalties}
+                          </p>
+                        </motion.div>
+                      </div>
+                    </motion.div>
+                  )}
+                </motion.div>
+              </motion.div>
 
               {/* Add Contribution */}
               <div className="bg-white rounded-lg shadow p-6">
@@ -599,7 +847,7 @@ function App() {
                     />
                   </div>
                   <p className="text-sm text-gray-600">
-                    This will be deducted from the member's social fund as an attendance penalty.
+                    Penalty for non-attendance to meetings.
                   </p>
                   <button
                     type="submit"
@@ -615,7 +863,7 @@ function App() {
               Select a member to see details
             </div>
           )}
-        </div>
+        </motion.div>
       </div>
     )
   }
@@ -657,9 +905,20 @@ function App() {
             <>
               {/* Loan Summary */}
               <div className="bg-white rounded-lg shadow p-6">
-                <h2 className="text-2xl font-bold text-gray-800 mb-4">
-                  Loan #{selectedLoan.id}
-                </h2>
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-2xl font-bold text-gray-800">
+                    Loan #{selectedLoan.id}
+                  </h2>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteLoan(selectedLoan.id)}
+                      className="bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg transition"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
                 <div className="grid grid-cols-2 gap-4 mb-4">
                   <div>
                     <p className="text-gray-600 text-sm">Principal</p>
@@ -688,9 +947,24 @@ function App() {
                     </p>
                   </div>
                 </div>
-                <div>
-                  <p className="text-gray-600 text-sm">Status</p>
-                  <p className="text-lg font-semibold text-gray-800">{selectedLoan.status}</p>
+                <div className="space-y-3">
+                  <div>
+                    <p className="text-gray-600 text-sm mb-2">Status</p>
+                    <div className="flex gap-2 items-center">
+                      <p className="text-lg font-semibold text-gray-800">{selectedLoan.status}</p>
+                      <select
+                        value={selectedLoan.status}
+                        onChange={(e) => handleUpdateLoanStatus(selectedLoan.id, e.target.value as LoanStatus)}
+                        className="px-3 py-1 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                      >
+                        <option value="APPROVED">APPROVED</option>
+                        <option value="RELEASED">RELEASED</option>
+                        <option value="ONGOING">ONGOING</option>
+                        <option value="COMPLETED">COMPLETED</option>
+                        <option value="CANCELLED">CANCELLED</option>
+                      </select>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -811,10 +1085,10 @@ function App() {
               <img 
                 src="/Logo.png" 
                 alt="COMSCA Logo" 
-                className="h-14 w-auto"
+                className="h-16 w-auto"
               />
               <div>
-                <h1 className="text-2xl font-bold text-green-700">COMSCA Admin</h1>
+                <h1 className="text-2xl font-bold text-green-700">COMSCAibigan Admin</h1>
                 <p className="text-green-600 text-xs">Cooperative Management System</p>
               </div>
             </div>
@@ -888,6 +1162,97 @@ function App() {
         isOpen={yearEndReportOpen}
         onClose={() => setYearEndReportOpen(false)}
       />
+
+      {/* Notifications */}
+      <div className="fixed top-4 right-4 z-50 space-y-2">
+        {notifications.map((notification) => (
+          <motion.div
+            key={notification.id}
+            initial={{ opacity: 0, x: 100 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 100 }}
+            transition={{ duration: 0.3 }}
+            className={`px-6 py-3 rounded-lg shadow-lg font-semibold text-white max-w-sm ${
+              notification.type === 'success'
+                ? 'bg-green-600'
+                : notification.type === 'error'
+                  ? 'bg-red-600'
+                  : 'bg-blue-600'
+            }`}
+          >
+            {notification.message}
+          </motion.div>
+        ))}
+      </div>
+
+      {/* Add Member Modal */}
+      {addMemberModalOpen && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.2 }}
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-40"
+          onClick={() => setAddMemberModalOpen(false)}
+        >
+          <motion.div
+            initial={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.95, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="bg-white rounded-lg shadow-xl p-8 max-w-md w-full mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-2xl font-bold text-gray-800 mb-6">Add New Member</h2>
+            <form onSubmit={(e) => {
+              handleCreateMember(e)
+              setAddMemberModalOpen(false)
+            }} className="space-y-4">
+              <div>
+                <label className="block text-gray-700 font-semibold mb-2">Full Name</label>
+                <input
+                  type="text"
+                  placeholder="Enter member's full name"
+                  value={newMemberName}
+                  onChange={(e) => setNewMemberName(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 transition"
+                  autoFocus
+                />
+              </div>
+              <div>
+                <label className="block text-gray-700 font-semibold mb-2">Contact Info</label>
+                <input
+                  type="text"
+                  placeholder="Enter contact information"
+                  value={newMemberContact}
+                  onChange={(e) => setNewMemberContact(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 transition"
+                />
+              </div>
+              <div className="flex gap-3 pt-4">
+                <motion.button
+                  type="submit"
+                  disabled={loading}
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  className="flex-1 bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 disabled:from-gray-400 disabled:to-gray-400 text-white font-semibold py-2 rounded-lg transition"
+                >
+                  {loading ? 'Adding...' : 'Add Member'}
+                </motion.button>
+                <motion.button
+                  type="button"
+                  onClick={() => setAddMemberModalOpen(false)}
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  className="flex-1 bg-gray-300 hover:bg-gray-400 text-gray-800 font-semibold py-2 rounded-lg transition"
+                >
+                  Cancel
+                </motion.button>
+              </div>
+            </form>
+          </motion.div>
+        </motion.div>
+      )}
     </div>
   )
 }

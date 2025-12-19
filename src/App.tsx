@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { supabase } from './lib/supabaseClient'
-import { type Member, listMembers, createMember, updateMember } from './api/members'
+import { type Member, listMembers, createMember } from './api/members'
 import {
   type ContributionType,
   createContribution,
@@ -89,6 +89,9 @@ function App() {
   // Outstanding loans breakdown modal state
   const [outstandingLoansBreakdownOpen, setOutstandingLoansBreakdownOpen] = useState(false)
 
+  // Members sorting state
+  const [membersSortBy, setMembersSortBy] = useState<'name' | 'recordId'>('name')
+
   // Notification state
   type NotificationType = 'success' | 'error' | 'info'
   interface Notification {
@@ -170,6 +173,17 @@ function App() {
     [selectedLoan],
   )
 
+  // Sort members based on selected sort option
+  const sortedMembers = useMemo(() => {
+    const sorted = [...members]
+    if (membersSortBy === 'name') {
+      sorted.sort((a, b) => a.full_name.localeCompare(b.full_name))
+    } else if (membersSortBy === 'recordId') {
+      sorted.sort((a, b) => Number(a.record_id || 0) - Number(b.record_id || 0))
+    }
+    return sorted
+  }, [members, membersSortBy])
+
   // Aggregated totals for dashboard
   const totalSharesValue = members.reduce(
     (sum, m) => sum + Number(m.total_shares || 0),
@@ -194,7 +208,7 @@ function App() {
     return sum + paidServiceCharges
   }, 0)
   
-  // Calculate outstanding loan balance (unpaid principal + unpaid service charges)
+  // Calculate outstanding loan balance (unpaid principal only)
   const totalOutstandingLoans = loans.reduce((sum, loan) => {
     const loanPaymentsForLoan = allLoanPayments.filter(p => p.loan_id === loan.id)
     
@@ -204,13 +218,7 @@ function App() {
       .reduce((acc, p) => acc + Number(p.amount || 0), 0)
     const unpaidPrincipal = Math.max(0, Number(loan.principal_amount || 0) - principalPayments)
     
-    // Calculate unpaid service charge
-    const serviceChargePayments = loanPaymentsForLoan
-      .filter(p => p.payment_type === 'SERVICE_CHARGE')
-      .reduce((acc, p) => acc + Number(p.amount || 0), 0)
-    const unpaidServiceCharge = Math.max(0, Number(loan.service_charge_amount || 0) - serviceChargePayments)
-    
-    return sum + unpaidPrincipal + unpaidServiceCharge
+    return sum + unpaidPrincipal
   }, 0)
   
   // Grand total cash on hand = contributions + service charge earnings - outstanding loans
@@ -473,16 +481,26 @@ function App() {
     setLoading(true)
     setError(null)
     try {
-      const updatedMember = await updateMember(editingMemberId, {
-        full_name: editMemberName.trim(),
-        contact_info: editMemberContact.trim() || undefined,
-      })
-      setMembers((prev) =>
-        prev.map((m) => (m.id === editingMemberId ? updatedMember : m))
-      )
+      const recordId = editMemberRecordId ? Number(editMemberRecordId) : undefined
+      const { error } = await supabase
+        .from('members')
+        .update({
+          full_name: editMemberName.trim(),
+          contact_info: editMemberContact.trim() || null,
+          record_id: recordId,
+        })
+        .eq('id', editingMemberId)
+
+      if (error) throw error
+
+      // Refresh members to get updated data
+      const updatedMembers = await listMembers()
+      setMembers(updatedMembers)
       setEditingMemberId(null)
       setEditMemberName('')
       setEditMemberContact('')
+      setEditMemberRecordId('')
+      showNotification('success', 'Member updated successfully')
     } catch (err: any) {
       setError(err.message ?? 'Failed to update member')
     } finally {
@@ -494,6 +512,7 @@ function App() {
     setEditingMemberId(member.id)
     setEditMemberName(member.full_name)
     setEditMemberContact(member.contact_info || '')
+    setEditMemberRecordId(String(member.record_id || ''))
   }
 
   function cancelEditMember() {
@@ -617,8 +636,20 @@ function App() {
             </motion.button>
           </div>
 
+          <div className="mb-4">
+            <label className="block text-gray-700 font-semibold mb-2 text-sm">Sort By</label>
+            <select
+              value={membersSortBy}
+              onChange={(e) => setMembersSortBy(e.target.value as 'name' | 'recordId')}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-sm"
+            >
+              <option value="name">Name (A-Z)</option>
+              <option value="recordId">Record ID (Ascending)</option>
+            </select>
+          </div>
+
           <div className="flex-1 overflow-y-auto pr-2 space-y-2">
-            {members.map((m, index) => (
+            {sortedMembers.map((m, index) => (
               <motion.button
                 key={m.id}
                 type="button"
@@ -688,15 +719,6 @@ function App() {
                       transition={{ duration: 0.3 }}
                       className="space-y-4"
                     >
-                      <div className="bg-gradient-to-r from-blue-50 to-blue-100 rounded-lg p-4 border border-blue-200">
-                        <label className="block text-gray-700 font-semibold mb-2">Record ID</label>
-                        <input
-                          type="number"
-                          value={editMemberRecordId}
-                          onChange={(e) => setEditMemberRecordId(e.target.value)}
-                          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                        />
-                      </div>
                       <div>
                         <label className="block text-gray-700 font-semibold mb-2">Full Name</label>
                         <input
@@ -706,14 +728,25 @@ function App() {
                           className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                         />
                       </div>
-                      <div>
-                        <label className="block text-gray-700 font-semibold mb-2">Contact Info</label>
-                        <input
-                          type="text"
-                          value={editMemberContact}
-                          onChange={(e) => setEditMemberContact(e.target.value)}
-                          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        />
+                      <div className="grid grid-cols-3 gap-3">
+                        <div className="col-span-2">
+                          <label className="block text-gray-700 font-semibold mb-2">Contact Info</label>
+                          <input
+                            type="text"
+                            value={editMemberContact}
+                            onChange={(e) => setEditMemberContact(e.target.value)}
+                            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-gray-700 font-semibold mb-2 text-sm">Record ID</label>
+                          <input
+                            type="number"
+                            value={editMemberRecordId}
+                            onChange={(e) => setEditMemberRecordId(e.target.value)}
+                            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-sm"
+                          />
+                        </div>
                       </div>
                       <div className="flex gap-2 pt-2">
                         <motion.button
@@ -1404,13 +1437,6 @@ function App() {
                     .filter(p => p.payment_type === 'PRINCIPAL')
                     .reduce((acc, p) => acc + Number(p.amount || 0), 0)
                   const unpaidPrincipal = Math.max(0, Number(loan.principal_amount || 0) - principalPayments)
-                  
-                  const serviceChargePayments = loanPaymentsForLoan
-                    .filter(p => p.payment_type === 'SERVICE_CHARGE')
-                    .reduce((acc, p) => acc + Number(p.amount || 0), 0)
-                  const unpaidServiceCharge = Math.max(0, Number(loan.service_charge_amount || 0) - serviceChargePayments)
-                  
-                  const totalOutstanding = unpaidPrincipal + unpaidServiceCharge
 
                   return (
                     <div key={loan.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition">
@@ -1420,22 +1446,15 @@ function App() {
                           <p className="text-sm text-gray-600">{getMemberName(loan.borrower_id)}</p>
                         </div>
                         <div className="text-right">
-                          <p className="text-lg font-bold text-red-600">₱{totalOutstanding.toFixed(2)}</p>
+                          <p className="text-lg font-bold text-red-600">₱{unpaidPrincipal.toFixed(2)}</p>
                           <p className="text-xs text-gray-500">{loan.status}</p>
                         </div>
                       </div>
                       
-                      <div className="grid grid-cols-2 gap-4 text-sm">
-                        <div className="bg-blue-50 rounded p-3">
-                          <p className="text-gray-600 text-xs font-medium">Unpaid Principal</p>
-                          <p className="text-lg font-semibold text-blue-600 mt-1">₱{unpaidPrincipal.toFixed(2)}</p>
-                          <p className="text-xs text-gray-500 mt-1">of ₱{Number(loan.principal_amount).toFixed(2)}</p>
-                        </div>
-                        <div className="bg-orange-50 rounded p-3">
-                          <p className="text-gray-600 text-xs font-medium">Unpaid Service Charge</p>
-                          <p className="text-lg font-semibold text-orange-600 mt-1">₱{unpaidServiceCharge.toFixed(2)}</p>
-                          <p className="text-xs text-gray-500 mt-1">of ₱{Number(loan.service_charge_amount || 0).toFixed(2)}</p>
-                        </div>
+                      <div className="bg-blue-50 rounded p-3">
+                        <p className="text-gray-600 text-xs font-medium">Outstanding Principal</p>
+                        <p className="text-lg font-semibold text-blue-600 mt-1">₱{unpaidPrincipal.toFixed(2)}</p>
+                        <p className="text-xs text-gray-500 mt-1">of ₱{Number(loan.principal_amount).toFixed(2)}</p>
                       </div>
                     </div>
                   )

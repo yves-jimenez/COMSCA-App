@@ -153,6 +153,16 @@ export async function createLoanPayment(input: CreateLoanPaymentInput): Promise<
       .eq('id', input.loan_id)
 
     if (updateError) throw updateError
+
+    // Auto-update status to COMPLETED if principal reaches 0
+    if (newPrincipal === 0) {
+      const { error: statusError } = await supabase
+        .from('loans')
+        .update({ status: 'COMPLETED' })
+        .eq('id', input.loan_id)
+
+      if (statusError) throw statusError
+    }
   }
 
   return data as LoanPayment

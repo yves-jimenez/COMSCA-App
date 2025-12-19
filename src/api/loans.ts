@@ -16,11 +16,14 @@ export type Loan = {
   remarks: string | null
 }
 
+export type PaymentType = 'SERVICE_CHARGE' | 'PRINCIPAL'
+
 export type LoanPayment = {
   id: number
   loan_id: number
   payment_date: string
   amount: string
+  payment_type: PaymentType
   remarks: string | null
 }
 
@@ -34,7 +37,8 @@ export type CreateLoanInput = {
 
 export type CreateLoanPaymentInput = {
   loan_id: number
-  amount: number
+  payment_type: PaymentType
+  amount?: number
   payment_date?: string
   remarks?: string
 }
@@ -90,7 +94,7 @@ export async function deleteLoan(loanId: number): Promise<void> {
 export async function listLoanPayments(loanId: number): Promise<LoanPayment[]> {
   const { data, error } = await supabase
     .from('loan_payments')
-    .select('id, loan_id, payment_date, amount, remarks')
+    .select('id, loan_id, payment_date, amount, payment_type, remarks')
     .eq('loan_id', loanId)
     .order('payment_date', { ascending: true })
 
@@ -99,40 +103,57 @@ export async function listLoanPayments(loanId: number): Promise<LoanPayment[]> {
 }
 
 export async function createLoanPayment(input: CreateLoanPaymentInput): Promise<LoanPayment> {
-  // Create the payment record
-  const { data, error } = await supabase
-    .from('loan_payments')
-    .insert({
-      loan_id: input.loan_id,
-      amount: input.amount,
-      payment_date: input.payment_date ?? new Date().toISOString().slice(0, 10),
-      remarks: input.remarks ?? null,
-    })
-    .select('id, loan_id, payment_date, amount, remarks')
-    .single()
-
-  if (error) throw error
-
-  // Fetch the current loan to get its principal
+  // Fetch the current loan to get its details
   const { data: loanData, error: loanError } = await supabase
     .from('loans')
-    .select('principal_amount')
+    .select('principal_amount, service_charge_amount')
     .eq('id', input.loan_id)
     .single()
 
   if (loanError) throw loanError
 
-  // Calculate new principal (reduce by payment amount)
-  const currentPrincipal = Number(loanData.principal_amount || 0)
-  const newPrincipal = Math.max(0, currentPrincipal - input.amount)
+  let paymentAmount: number
 
-  // Update the loan's principal amount
-  const { error: updateError } = await supabase
-    .from('loans')
-    .update({ principal_amount: newPrincipal })
-    .eq('id', input.loan_id)
+  // Determine payment amount based on payment type
+  if (input.payment_type === 'SERVICE_CHARGE') {
+    // Service charge payment is always the full service charge amount
+    paymentAmount = Number(loanData.service_charge_amount || 0)
+  } else {
+    // Principal payment uses the provided amount
+    if (!input.amount || input.amount <= 0) {
+      throw new Error('Principal payment amount must be greater than 0')
+    }
+    paymentAmount = input.amount
+  }
 
-  if (updateError) throw updateError
+  // Create the payment record
+  const { data, error } = await supabase
+    .from('loan_payments')
+    .insert({
+      loan_id: input.loan_id,
+      payment_type: input.payment_type,
+      amount: paymentAmount,
+      payment_date: input.payment_date ?? new Date().toISOString().slice(0, 10),
+      remarks: input.remarks ?? null,
+    })
+    .select('id, loan_id, payment_date, amount, payment_type, remarks')
+    .single()
+
+  if (error) throw error
+
+  // Only reduce principal for PRINCIPAL payments
+  if (input.payment_type === 'PRINCIPAL') {
+    const currentPrincipal = Number(loanData.principal_amount || 0)
+    const newPrincipal = Math.max(0, currentPrincipal - paymentAmount)
+
+    // Update the loan's principal amount
+    const { error: updateError } = await supabase
+      .from('loans')
+      .update({ principal_amount: newPrincipal })
+      .eq('id', input.loan_id)
+
+    if (updateError) throw updateError
+  }
 
   return data as LoanPayment
 }

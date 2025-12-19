@@ -18,6 +18,7 @@ import {
   updateLoanStatus,
   deleteLoan,
   type LoanStatus,
+  type PaymentType,
 } from './api/loans'
 import {
   type YearEndDistribution,
@@ -37,6 +38,7 @@ function App() {
   const [loans, setLoans] = useState<Loan[]>([])
   const [selectedLoanId, setSelectedLoanId] = useState<number | null>(null)
   const [loanPayments, setLoanPayments] = useState<LoanPayment[]>([])
+  const [allLoanPayments, setAllLoanPayments] = useState<LoanPayment[]>([])
 
   const [screen, setScreen] = useState<Screen>('dashboard')
 
@@ -57,6 +59,7 @@ function App() {
   const [previewServiceCharge, setPreviewServiceCharge] = useState(0)
 
   // Loan payment form state
+  const [paymentType, setPaymentType] = useState<PaymentType>('PRINCIPAL')
   const [paymentAmount, setPaymentAmount] = useState('')
   const [paymentDate, setPaymentDate] = useState('')
   const [paymentRemarks, setPaymentRemarks] = useState('')
@@ -82,6 +85,9 @@ function App() {
 
   // Add member modal state
   const [addMemberModalOpen, setAddMemberModalOpen] = useState(false)
+
+  // Outstanding loans breakdown modal state
+  const [outstandingLoansBreakdownOpen, setOutstandingLoansBreakdownOpen] = useState(false)
 
   // Notification state
   type NotificationType = 'success' | 'error' | 'info'
@@ -128,6 +134,27 @@ function App() {
     }
   }
 
+  // Fetch all loan payments when loans change
+  useEffect(() => {
+    const fetchAllPayments = async () => {
+      if (loans.length === 0) {
+        setAllLoanPayments([])
+        return
+      }
+      try {
+        const allPayments: LoanPayment[] = []
+        for (const loan of loans) {
+          const payments = await listLoanPayments(loan.id)
+          allPayments.push(...payments)
+        }
+        setAllLoanPayments(allPayments)
+      } catch {
+        setAllLoanPayments([])
+      }
+    }
+    void fetchAllPayments()
+  }, [loans])
+
   const selectedMember = useMemo(
     () => members.find((m) => m.id === selectedMemberId) ?? null,
     [members, selectedMemberId],
@@ -152,24 +179,42 @@ function App() {
     (sum, m) => sum + Number(m.total_social_fund_contributions || 0),
     0,
   )
-  const totalServiceCharge = loans.reduce(
-    (sum, l) => sum + Number(l.service_charge_amount || 0),
-    0,
-  )
   const totalPenalties = members.reduce(
     (sum, m) => sum + Number(m.total_penalties || 0),
     0,
   )
   const totalContributions = totalSharesValue + totalSocialFund
   
-  // Calculate total outstanding loan balance
-  const totalOutstandingLoans = loans.reduce(
-    (sum, l) => sum + Number(l.principal_amount || 0) + Number(l.service_charge_amount || 0),
-    0,
-  )
+  // Calculate service charge earnings (only PAID service charges)
+  const totalServiceChargeEarnings = loans.reduce((sum, loan) => {
+    const loanPaymentsForLoan = allLoanPayments.filter(p => p.loan_id === loan.id)
+    const paidServiceCharges = loanPaymentsForLoan
+      .filter(p => p.payment_type === 'SERVICE_CHARGE')
+      .reduce((acc, p) => acc + Number(p.amount || 0), 0)
+    return sum + paidServiceCharges
+  }, 0)
   
-  // Grand total cash on hand = contributions + service charges - outstanding loans
-  const grandTotalCashOnHand = totalContributions + totalServiceCharge - totalOutstandingLoans
+  // Calculate outstanding loan balance (unpaid principal + unpaid service charges)
+  const totalOutstandingLoans = loans.reduce((sum, loan) => {
+    const loanPaymentsForLoan = allLoanPayments.filter(p => p.loan_id === loan.id)
+    
+    // Calculate unpaid principal
+    const principalPayments = loanPaymentsForLoan
+      .filter(p => p.payment_type === 'PRINCIPAL')
+      .reduce((acc, p) => acc + Number(p.amount || 0), 0)
+    const unpaidPrincipal = Math.max(0, Number(loan.principal_amount || 0) - principalPayments)
+    
+    // Calculate unpaid service charge
+    const serviceChargePayments = loanPaymentsForLoan
+      .filter(p => p.payment_type === 'SERVICE_CHARGE')
+      .reduce((acc, p) => acc + Number(p.amount || 0), 0)
+    const unpaidServiceCharge = Math.max(0, Number(loan.service_charge_amount || 0) - serviceChargePayments)
+    
+    return sum + unpaidPrincipal + unpaidServiceCharge
+  }, 0)
+  
+  // Grand total cash on hand = contributions + service charge earnings - outstanding loans
+  const grandTotalCashOnHand = totalContributions + totalServiceChargeEarnings - totalOutstandingLoans
 
   async function handleCreateMember(e: React.FormEvent) {
     e.preventDefault()
@@ -258,14 +303,23 @@ function App() {
   async function handleAddPayment(e: React.FormEvent) {
     e.preventDefault()
     if (!selectedLoanId) return
-    const amount = Number(paymentAmount)
-    if (!Number.isFinite(amount) || amount <= 0) return
 
     setLoading(true)
     setError(null)
     try {
+      let amount: number | undefined
+      if (paymentType === 'PRINCIPAL') {
+        amount = Number(paymentAmount)
+        if (!Number.isFinite(amount) || amount <= 0) {
+          setError('Principal payment amount must be greater than 0')
+          setLoading(false)
+          return
+        }
+      }
+
       await createLoanPayment({
         loan_id: selectedLoanId,
+        payment_type: paymentType,
         amount,
         payment_date: paymentDate || undefined,
         remarks: paymentRemarks || undefined,
@@ -278,6 +332,7 @@ function App() {
       setPaymentAmount('')
       setPaymentDate('')
       setPaymentRemarks('')
+      showNotification('success', `${paymentType === 'SERVICE_CHARGE' ? 'Service charge' : 'Principal'} payment recorded successfully`)
     } catch (err: any) {
       setError(err.message ?? 'Failed to add payment')
     } finally {
@@ -464,7 +519,7 @@ function App() {
             { label: 'Total Shares (Pesos)', value: totalSharesValue, color: 'blue' },
             { label: 'Total Social Fund', value: totalSocialFund, color: 'green' },
             { label: 'Total Contributions', value: totalContributions, color: 'purple' },
-            { label: 'Service Charge Earnings', value: totalServiceCharge, color: 'green' },
+            { label: 'Service Charge Earnings', value: totalServiceChargeEarnings, color: 'green' },
             { label: 'Total Penalties', value: totalPenalties, color: 'red' },
           ].map((card, i) => (
             <motion.div
@@ -501,6 +556,22 @@ function App() {
 
         <motion.div
           custom={6}
+          variants={cardVariants}
+          whileHover={{ scale: 1.02 }}
+          className="bg-gradient-to-r from-red-600 to-red-700 rounded-lg shadow p-8 text-white cursor-pointer"
+          onClick={() => setOutstandingLoansBreakdownOpen(true)}
+        >
+          <p className="text-lg font-medium opacity-90">Outstanding Loans</p>
+          <p className="text-5xl font-bold mt-3">
+            ₱{totalOutstandingLoans.toFixed(2)}
+          </p>
+          <p className="text-sm opacity-75 mt-2">
+            Click to view breakdown
+          </p>
+        </motion.div>
+
+        <motion.div
+          custom={7}
           variants={cardVariants}
           whileHover={{ scale: 1.02 }}
           className="bg-white rounded-lg shadow p-6"
@@ -974,17 +1045,44 @@ function App() {
                 <form onSubmit={handleAddPayment} className="space-y-4">
                   <div>
                     <label className="block text-gray-700 font-semibold mb-2">
-                      Payment amount
+                      Payment Type
                     </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      placeholder="Amount"
-                      value={paymentAmount}
-                      onChange={(e) => setPaymentAmount(e.target.value)}
+                    <select
+                      value={paymentType}
+                      onChange={(e) => setPaymentType(e.target.value as PaymentType)}
                       className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
+                    >
+                      <option value="PRINCIPAL">Principal Payment</option>
+                      <option value="SERVICE_CHARGE">Service Charge Payment</option>
+                    </select>
                   </div>
+
+                  {paymentType === 'PRINCIPAL' && (
+                    <div>
+                      <label className="block text-gray-700 font-semibold mb-2">
+                        Payment amount
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        placeholder="Amount"
+                        value={paymentAmount}
+                        onChange={(e) => setPaymentAmount(e.target.value)}
+                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                  )}
+
+                  {paymentType === 'SERVICE_CHARGE' && (
+                    <div className="bg-orange-50 border border-orange-200 rounded-lg p-4">
+                      <p className="text-sm text-gray-600 mb-2">Service Charge Amount:</p>
+                      <p className="text-2xl font-bold text-orange-600">
+                        ₱{Number(selectedLoan?.service_charge_amount || 0).toFixed(2)}
+                      </p>
+                      <p className="text-xs text-gray-500 mt-2">This amount will be recorded as the service charge payment</p>
+                    </div>
+                  )}
+
                   <div>
                     <label className="block text-gray-700 font-semibold mb-2">
                       Payment date (optional)
@@ -1029,6 +1127,9 @@ function App() {
                             Date
                           </th>
                           <th className="px-4 py-2 text-left font-semibold text-gray-700">
+                            Type
+                          </th>
+                          <th className="px-4 py-2 text-left font-semibold text-gray-700">
                             Amount
                           </th>
                           <th className="px-4 py-2 text-left font-semibold text-gray-700">
@@ -1040,6 +1141,15 @@ function App() {
                         {loanPayments.map((payment) => (
                           <tr key={payment.id} className="border-b hover:bg-gray-50">
                             <td className="px-4 py-2 text-gray-800">{payment.payment_date}</td>
+                            <td className="px-4 py-2">
+                              <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                                payment.payment_type === 'SERVICE_CHARGE'
+                                  ? 'bg-orange-100 text-orange-800'
+                                  : 'bg-blue-100 text-blue-800'
+                              }`}>
+                                {payment.payment_type === 'SERVICE_CHARGE' ? 'Service Charge' : 'Principal'}
+                              </span>
+                            </td>
                             <td className="px-4 py-2 font-semibold text-green-600">
                               ₱{Number(payment.amount).toFixed(2)}
                             </td>
@@ -1250,6 +1360,114 @@ function App() {
                 </motion.button>
               </div>
             </form>
+          </motion.div>
+        </motion.div>
+      )}
+
+      {/* Outstanding Loans Breakdown Modal */}
+      {outstandingLoansBreakdownOpen && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.2 }}
+          className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-40 p-4"
+          onClick={() => setOutstandingLoansBreakdownOpen(false)}
+        >
+          <motion.div
+            initial={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.95, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="bg-white rounded-lg shadow-xl p-8 max-w-2xl w-full max-h-96 overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-2xl font-bold text-gray-800">Outstanding Loans Breakdown</h2>
+              <button
+                type="button"
+                onClick={() => setOutstandingLoansBreakdownOpen(false)}
+                className="text-gray-500 hover:text-gray-700 text-2xl"
+              >
+                ✕
+              </button>
+            </div>
+
+            {loans.length === 0 ? (
+              <p className="text-gray-600 text-center py-8">No loans found</p>
+            ) : (
+              <div className="space-y-4">
+                {loans.filter(loan => loan.status !== 'COMPLETED').map((loan) => {
+                  const loanPaymentsForLoan = allLoanPayments.filter(p => p.loan_id === loan.id)
+                  
+                  const principalPayments = loanPaymentsForLoan
+                    .filter(p => p.payment_type === 'PRINCIPAL')
+                    .reduce((acc, p) => acc + Number(p.amount || 0), 0)
+                  const unpaidPrincipal = Math.max(0, Number(loan.principal_amount || 0) - principalPayments)
+                  
+                  const serviceChargePayments = loanPaymentsForLoan
+                    .filter(p => p.payment_type === 'SERVICE_CHARGE')
+                    .reduce((acc, p) => acc + Number(p.amount || 0), 0)
+                  const unpaidServiceCharge = Math.max(0, Number(loan.service_charge_amount || 0) - serviceChargePayments)
+                  
+                  const totalOutstanding = unpaidPrincipal + unpaidServiceCharge
+
+                  return (
+                    <div key={loan.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition">
+                      <div className="flex items-center justify-between mb-3">
+                        <div>
+                          <h3 className="font-semibold text-gray-800">Loan #{loan.id}</h3>
+                          <p className="text-sm text-gray-600">{getMemberName(loan.borrower_id)}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-lg font-bold text-red-600">₱{totalOutstanding.toFixed(2)}</p>
+                          <p className="text-xs text-gray-500">{loan.status}</p>
+                        </div>
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-4 text-sm">
+                        <div className="bg-blue-50 rounded p-3">
+                          <p className="text-gray-600 text-xs font-medium">Unpaid Principal</p>
+                          <p className="text-lg font-semibold text-blue-600 mt-1">₱{unpaidPrincipal.toFixed(2)}</p>
+                          <p className="text-xs text-gray-500 mt-1">of ₱{Number(loan.principal_amount).toFixed(2)}</p>
+                        </div>
+                        <div className="bg-orange-50 rounded p-3">
+                          <p className="text-gray-600 text-xs font-medium">Unpaid Service Charge</p>
+                          <p className="text-lg font-semibold text-orange-600 mt-1">₱{unpaidServiceCharge.toFixed(2)}</p>
+                          <p className="text-xs text-gray-500 mt-1">of ₱{Number(loan.service_charge_amount || 0).toFixed(2)}</p>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+                {loans.filter(loan => loan.status === 'COMPLETED').length > 0 && (
+                  <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-center">
+                    <p className="text-sm text-green-700 font-medium">
+                      {loans.filter(loan => loan.status === 'COMPLETED').length} completed loan(s) not shown
+                    </p>
+                  </div>
+                )}
+                
+                <div className="border-t-2 border-gray-300 pt-4 mt-4">
+                  <div className="flex items-center justify-between">
+                    <p className="text-lg font-bold text-gray-800">Total Outstanding</p>
+                    <p className="text-2xl font-bold text-red-600">₱{totalOutstandingLoans.toFixed(2)}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="flex gap-3 pt-6 mt-6 border-t">
+              <motion.button
+                type="button"
+                onClick={() => setOutstandingLoansBreakdownOpen(false)}
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
+                className="flex-1 bg-gray-300 hover:bg-gray-400 text-gray-800 font-semibold py-2 rounded-lg transition"
+              >
+                Close
+              </motion.button>
+            </div>
           </motion.div>
         </motion.div>
       )}
